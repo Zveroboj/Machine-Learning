@@ -1,0 +1,152 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Oleg"
+date: "August 29, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Data and libraries
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+We will use several packages for data analysis:
+
+- library(dplyr)
+- library(caret)
+- library(randomForest)
+- library(ggplot2)
+
+```{r  echo=FALSE}
+# Download data and required libraries
+
+pml.training <-read.csv("pml-training.csv")
+pml.testing<- read.csv("pml-testing.csv")
+
+training<-pml.training
+testing<-pml.testing
+
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(randomForest))
+
+```
+
+### Cleaning data
+
+There are several data fields that contain useless data for the purpose of prediction analysis:
+
+- Fields containing user names, timestamps, etc.
+- Fields containing a lot of error entries, e.g., #DIV/0!
+- Fields containing a lot of NA values
+- Fields containing a factor type variable with ten-fold levels
+
+```{r pressure, echo=FALSE}
+str(training[,1:7])
+str(training$min_yaw_belt); str(training$var_total_accel_belt); str(training$skewness_yaw_dumbbell)
+```
+
+We will do the following steps:
+
+- Remove first seven columns with unusable info
+- ID columns containing factors
+- Change the factors into numeric variables for all fields, except the output
+- Remove fields containing NA
+```{r echo=FALSE}
+#
+training<-training[,-c(1:7)] # remove first columns with unusable info
+#
+for (i in 1:dim(training)[2]){
+     index<-which(training[,i]=="#DIV/0!")
+     training[index,i]<-NA
+}
+
+# ID columns containing factors
+col_names <- c()
+n <- ncol(training)-1
+for (i in 1:n) {
+     if (is.factor(training[,i])){
+          col_names <- c(col_names,i)
+     }
+}
+
+#change factors in numeric, remove fields containing NA
+training[,col_names]<-as.numeric(as.character(training[,col_names]))
+training <-training[,colSums(is.na(training))==0]
+```
+
+```{r echo=FALSE}
+d<-dim(training)
+```
+
+The final set's dimensions are: `r d`.
+
+### Exploratory analysis
+
+Based on the exploratory analysis (please see an excerpt below), we don't see evidence of linear relationships between independent and dependent variables. Given that, it makes sense to run classification analysis, particularly a random forest analysis.
+
+```{r echo=FALSE, fig.align='center'}
+pairs(training[,49:53])
+```
+
+### Creating training and validation sub-sets from the training data
+
+We will use the "caret" package to split the "training" dataset into two subsets: one for training ("tra") and one for validation ("val").
+
+```{r echo=FALSE}
+TI <- createDataPartition(y=training$classe, p=0.75, list=FALSE)
+tra<- training[TI,]
+val<- training[-TI,]
+```
+
+### Train the model using "randomForest"
+
+We then train the model on the "tra" dataset using the "randomForest" function. The top 10 most important drivers of the output variable "classe" are illustrated in the chart below.
+
+```{r echo=FALSE, fig.align='center'}
+modFit <- randomForest(classe ~., data = tra)
+
+im<-as.data.frame(importance(modFit, scale = T)); im$Activity<-row.names(im)
+names(im)<-c("Mean Decrease Gini","Activity"); im<-select(im, Activity, `Mean Decrease Gini`)
+
+t<-head(arrange(im, desc(`Mean Decrease Gini`)),10)
+ggplot(t, aes(x=`Mean Decrease Gini`,
+              y=reorder(Activity,`Mean Decrease Gini`)))+geom_point()+
+     labs(x="Mean Decrease Gini", y="Variables", title="Mean Decrease Gini")
+```
+
+
+```{r echo=FALSE}
+prediction <- predict(modFit, val)
+```
+
+### Check for accuracy
+
+
+```{r echo=FALSE, fig.align='center'}
+cm<-confusionMatrix(val$classe,predict(modFit,newdata=val))
+print(cm)
+```
+In-sample accuracy can be derived from cross validation. The fitted model was used to predict the "classe" variable in the validation subset ("val"). The in-sample accuracy is `r cm$overall[1]`. We can assume the out-sample accuracy to be somewhat worse, but not smaller than the lower limit of the 95% CI, i.e., 0.99.
+
+
+
+### Predict the output 
+
+Next, we run our random forest model on the "testing" dataset to arrive at predicted values:
+
+```{r echo=FALSE}
+# Predict
+prediction <- predict(modFit, testing)
+pr<-data.frame(matrix(prediction, ncol = 1, nrow = dim(testing)[1]))
+names(pr)<-"Predicted Classe"
+pr
+```
